@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 export default function ConfiguracionReportes() {
   const [emailDestinatario, setEmailDestinatario] = useState('cross.station11@gmail.com');
   const [horaCorteDiario, setHoraCorteDiario] = useState('20:00');
+  const [horaProgramadaGuardada, setHoraProgramadaGuardada] = useState('20:00');
   const [activo, setActivo] = useState(true);
   const [ultimoEnvio, setUltimoEnvio] = useState(null);
 
@@ -22,8 +23,20 @@ export default function ConfiguracionReportes() {
     : `/api/reportes?secret=${cronSecret}&check_time=true`;
 
   const ultimoEnvioMinutoRef = useRef('');
+  const horaGuardadaRef = useRef('20:00');
+  const activoRef = useRef(true);
 
-  // 1. Cargar configuración guardada
+  // 1. Cargar configuración inicial (SOLO una vez al montar)
+  useEffect(() => {
+    cargarConfiguracion();
+  }, []);
+
+  // Sincronizar ref de estado activo
+  useEffect(() => {
+    activoRef.current = activo;
+  }, [activo]);
+
+  // Cargar configuración guardada desde Supabase / API
   const cargarConfiguracion = async () => {
     setCargando(true);
     try {
@@ -35,8 +48,16 @@ export default function ConfiguracionReportes() {
 
       if (!error && data) {
         if (data.email_destinatario) setEmailDestinatario(data.email_destinatario);
-        if (data.hora_corte_diario) setHoraCorteDiario(data.hora_corte_diario.slice(0, 5));
-        if (typeof data.activo === 'boolean') setActivo(data.activo);
+        if (data.hora_corte_diario) {
+          const h = data.hora_corte_diario.slice(0, 5);
+          setHoraCorteDiario(h);
+          setHoraProgramadaGuardada(h);
+          horaGuardadaRef.current = h;
+        }
+        if (typeof data.activo === 'boolean') {
+          setActivo(data.activo);
+          activoRef.current = data.activo;
+        }
         if (data.ultimo_envio) setUltimoEnvio(data.ultimo_envio);
       } else {
         const { data: { session } } = await supabase.auth.getSession();
@@ -46,8 +67,16 @@ export default function ConfiguracionReportes() {
         const json = await res.json();
         if (json?.config) {
           if (json.config.email_destinatario) setEmailDestinatario(json.config.email_destinatario);
-          if (json.config.hora_corte_diario) setHoraCorteDiario(json.config.hora_corte_diario.slice(0, 5));
-          if (typeof json.config.activo === 'boolean') setActivo(json.config.activo);
+          if (json.config.hora_corte_diario) {
+            const h = json.config.hora_corte_diario.slice(0, 5);
+            setHoraCorteDiario(h);
+            setHoraProgramadaGuardada(h);
+            horaGuardadaRef.current = h;
+          }
+          if (typeof json.config.activo === 'boolean') {
+            setActivo(json.config.activo);
+            activoRef.current = json.config.activo;
+          }
           if (json.config.ultimo_envio) setUltimoEnvio(json.config.ultimo_envio);
         }
       }
@@ -60,8 +89,6 @@ export default function ConfiguracionReportes() {
 
   // 2. Reloj del sistema sincronizado con la estación (Venezuela / UTC-4)
   useEffect(() => {
-    cargarConfiguracion();
-
     const actualizarReloj = () => {
       const ahora = new Date();
       let horaVzla = '';
@@ -99,8 +126,8 @@ export default function ConfiguracionReportes() {
       setHoraActual(horaVzla);
 
       if (
-        activo &&
-        hhmmVzla === horaCorteDiario &&
+        activoRef.current &&
+        hhmmVzla === horaGuardadaRef.current &&
         ultimoEnvioMinutoRef.current !== `${fechaHoyVzla}_${hhmmVzla}`
       ) {
         ultimoEnvioMinutoRef.current = `${fechaHoyVzla}_${hhmmVzla}`;
@@ -111,7 +138,7 @@ export default function ConfiguracionReportes() {
     actualizarReloj();
     const interval = setInterval(actualizarReloj, 1000);
     return () => clearInterval(interval);
-  }, [activo, horaCorteDiario]);
+  }, []);
 
   const ejecutarDisparoAutomatico = async () => {
     try {
@@ -142,7 +169,8 @@ export default function ConfiguracionReportes() {
     setGuardando(true);
     setMensaje(null);
 
-    const horaNormalizada = horaCorteDiario.length === 5 ? `${horaCorteDiario}:00` : horaCorteDiario;
+    const horaCorta = horaCorteDiario.slice(0, 5);
+    const horaNormalizada = horaCorta.length === 5 ? `${horaCorta}:00` : horaCorteDiario;
 
     try {
       // 1. Guardar de forma directa en Supabase (tabla configuracion_reportes)
@@ -160,6 +188,11 @@ export default function ConfiguracionReportes() {
         console.warn('Nota guardando en Supabase:', dbError.message);
       }
 
+      // Actualizar estado de referencia guardado
+      setHoraProgramadaGuardada(horaCorta);
+      horaGuardadaRef.current = horaCorta;
+      activoRef.current = activo;
+
       // 2. Sincronizar en el endpoint API
       const { data: { session } } = await supabase.auth.getSession();
       const headers = {
@@ -173,14 +206,14 @@ export default function ConfiguracionReportes() {
         body: JSON.stringify({
           action: 'guardar_config',
           email_destinatario: emailDestinatario.trim(),
-          hora_corte_diario: horaCorteDiario.slice(0, 5),
+          hora_corte_diario: horaCorta,
           activo
         })
       });
 
       setMensaje({
         tipo: 'exito',
-        texto: `¡Configuración guardada! El cron job ejecutará el corte diario a las ${horaCorteDiario.slice(0, 5)} (Hora de la estación).`
+        texto: `¡Configuración guardada! El corte diario está programado a las ${horaCorta} (Hora de la estación).`
       });
     } catch (err) {
       console.error('Error al guardar configuración:', err);
@@ -406,7 +439,7 @@ export default function ConfiguracionReportes() {
 
               <div className="py-2.5 flex justify-between items-center">
                 <span className="text-slate-600">Hora programada:</span>
-                <span className="font-semibold text-slate-800">{horaCorteDiario}</span>
+                <span className="font-semibold text-slate-800">{horaProgramadaGuardada}</span>
               </div>
 
               <div className="py-2.5 flex justify-between items-center">
