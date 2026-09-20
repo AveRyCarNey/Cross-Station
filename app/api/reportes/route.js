@@ -100,7 +100,8 @@ async function obtenerConfiguracion(supabase) {
         hora_corte_diario: data.hora_corte_diario ? data.hora_corte_diario.slice(0, 5) : defaults.hora_corte_diario,
         email_destinatario: data.email_destinatario || defaults.email_destinatario,
         activo: typeof data.activo === 'boolean' ? data.activo : defaults.activo,
-        ultimo_envio: data.ultimo_envio || defaults.ultimo_envio
+        ultimo_envio: data.ultimo_envio || defaults.ultimo_envio,
+        actualizado_en: data.actualizado_en || null
       };
     }
   } catch (err) {
@@ -708,28 +709,49 @@ export async function GET(request) {
       });
     }
 
+    // Hora y fecha en la estación (Venezuela / America/Caracas, UTC-4)
     const ahora = new Date();
-    const hoyStr = ahora.toISOString().split('T')[0];
+    const horaActualStr = new Intl.DateTimeFormat('es-ES', {
+      timeZone: 'America/Caracas',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).format(ahora); // 'HH:MM'
 
-    // Verificar si ya se envió hoy
-    if (config.ultimo_envio && config.ultimo_envio.startsWith(hoyStr)) {
+    const hoyStr = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Caracas',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(ahora); // 'YYYY-MM-DD'
+
+    // Verificar si ya se envió hoy (a menos que el gerente haya reconfigurado la hora hoy después del envío)
+    const fueEnviadoHoy = config.ultimo_envio && config.ultimo_envio.startsWith(hoyStr);
+    const fueActualizadoDespues = config.actualizado_en && config.ultimo_envio && (new Date(config.actualizado_en) > new Date(config.ultimo_envio));
+
+    if (fueEnviadoHoy && !fueActualizadoDespues) {
       return NextResponse.json({
         saltado: true,
-        motivo: 'El reporte de corte diario ya fue enviado hoy'
+        motivo: `El reporte diario ya fue enviado hoy (${config.ultimo_envio})`
       });
     }
 
-    // Verificar coincidencia exacta de hora para crons de 1 minuto (ventana de 2 minutos por desfase de segundos)
-    const [hConf, mConf] = config.hora_corte_diario.split(':').map(Number);
-    const minutosActuales = ahora.getHours() * 60 + ahora.getMinutes();
-    const minutosObjetivo = hConf * 60 + mConf;
-    const horaActualStr = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', hour12: false });
+    // Comparar hora actual con la hora guardada por el gerente
+    const horaProgramada = (config.hora_corte_diario || '20:00').slice(0, 5);
+    const [hConf, mConf] = horaProgramada.split(':').map(Number);
+    const [hActual, mActual] = horaActualStr.split(':').map(Number);
 
-    // Si aún no es la hora o ya pasaron más de 2 minutos
-    if (minutosActuales < minutosObjetivo || (minutosActuales - minutosObjetivo) > 2) {
+    const minutosActuales = hActual * 60 + mActual;
+    const minutosObjetivo = hConf * 60 + mConf;
+    const diff = minutosActuales - minutosObjetivo;
+
+    // Si aún no es la hora o ya pasaron más de 2 minutos (ventana de tolerancia de 2 min)
+    if (diff < 0 || diff > 2) {
       return NextResponse.json({
         saltado: true,
-        motivo: `Aún no es la hora programada (${config.hora_corte_diario}). Hora actual servidor: ${horaActualStr}`
+        hora_estacion_venezuela: horaActualStr,
+        hora_corte_programada: horaProgramada,
+        motivo: `Aún no es la hora programada (${horaProgramada}). Hora actual en la estación: ${horaActualStr}`
       });
     }
   }

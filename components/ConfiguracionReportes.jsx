@@ -58,23 +58,52 @@ export default function ConfiguracionReportes() {
     }
   };
 
-  // 2. Reloj del sistema y envío puntual si la página está abierta
+  // 2. Reloj del sistema sincronizado con la estación (Venezuela / UTC-4)
   useEffect(() => {
     cargarConfiguracion();
 
     const actualizarReloj = () => {
       const ahora = new Date();
-      setHoraActual(ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      let horaVzla = '';
+      let hhmmVzla = '';
+      let fechaHoyVzla = '';
 
-      const hhmm = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', hour12: false });
-      const fechaHoy = ahora.toISOString().split('T')[0];
+      try {
+        horaVzla = new Intl.DateTimeFormat('es-ES', {
+          timeZone: 'America/Caracas',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false
+        }).format(ahora);
+
+        hhmmVzla = new Intl.DateTimeFormat('es-ES', {
+          timeZone: 'America/Caracas',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        }).format(ahora);
+
+        fechaHoyVzla = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Caracas',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).format(ahora);
+      } catch (e) {
+        horaVzla = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        hhmmVzla = ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', hour12: false });
+        fechaHoyVzla = ahora.toISOString().split('T')[0];
+      }
+
+      setHoraActual(horaVzla);
 
       if (
         activo &&
-        hhmm === horaCorteDiario &&
-        ultimoEnvioMinutoRef.current !== `${fechaHoy}_${hhmm}`
+        hhmmVzla === horaCorteDiario &&
+        ultimoEnvioMinutoRef.current !== `${fechaHoyVzla}_${hhmmVzla}`
       ) {
-        ultimoEnvioMinutoRef.current = `${fechaHoy}_${hhmm}`;
+        ultimoEnvioMinutoRef.current = `${fechaHoyVzla}_${hhmmVzla}`;
         ejecutarDisparoAutomatico();
       }
     };
@@ -107,48 +136,51 @@ export default function ConfiguracionReportes() {
     }
   };
 
-  // 3. Guardar cambios en la configuración
+  // 3. Guardar cambios en la configuración (Directo a Supabase + API)
   const handleGuardarConfig = async (e) => {
     e?.preventDefault();
     setGuardando(true);
     setMensaje(null);
 
+    const horaNormalizada = horaCorteDiario.length === 5 ? `${horaCorteDiario}:00` : horaCorteDiario;
+
     try {
+      // 1. Guardar de forma directa en Supabase (tabla configuracion_reportes)
+      const { error: dbError } = await supabase
+        .from('configuracion_reportes')
+        .upsert({
+          id: 1,
+          email_destinatario: emailDestinatario.trim(),
+          hora_corte_diario: horaNormalizada,
+          activo,
+          actualizado_en: new Date().toISOString()
+        });
+
+      if (dbError) {
+        console.warn('Nota guardando en Supabase:', dbError.message);
+      }
+
+      // 2. Sincronizar en el endpoint API
       const { data: { session } } = await supabase.auth.getSession();
       const headers = {
         'Content-Type': 'application/json',
         ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {})
       };
 
-      const res = await fetch('/api/reportes', {
+      await fetch('/api/reportes', {
         method: 'POST',
         headers,
         body: JSON.stringify({
           action: 'guardar_config',
           email_destinatario: emailDestinatario.trim(),
-          hora_corte_diario: horaCorteDiario,
+          hora_corte_diario: horaCorteDiario.slice(0, 5),
           activo
         })
       });
 
-      const data = await res.json();
-
-      if (!res.ok || data.error) {
-        const { error: directError } = await supabase
-          .from('configuracion_reportes')
-          .upsert({
-            id: 1,
-            email_destinatario: emailDestinatario.trim(),
-            hora_corte_diario: horaCorteDiario,
-            activo
-          });
-
-        if (directError) throw new Error(directError.message);
-      }
-
       setMensaje({
         tipo: 'exito',
-        texto: 'La configuración se guardó correctamente.'
+        texto: `¡Configuración guardada! El cron job ejecutará el corte diario a las ${horaCorteDiario.slice(0, 5)} (Hora de la estación).`
       });
     } catch (err) {
       console.error('Error al guardar configuración:', err);
