@@ -57,10 +57,30 @@ CREATE TABLE aforos (
     volumen_fisico_medido DECIMAL(10,2) NOT NULL,
     diferencia_detectada DECIMAL(10,2) NOT NULL,
     alerta_generada BOOLEAN DEFAULT false,
+    altura_vara_cm DECIMAL(6,2),
+    altura_agua_cm DECIMAL(6,2) DEFAULT 0.00,
+    tipo_registro VARCHAR(30) DEFAULT 'rutina' CHECK (tipo_registro IN ('rutina', 'post_descarga', 'mantenimiento', 'calibracion', 'otro')),
+    notas TEXT,
     fecha_medicion TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
 );
 
--- 7. TABLA DE CONFIGURACIÓN DE AUTOMATIZACIÓN (Para n8n)
+-- 7. TABLA DE MANTENIMIENTOS DE TANQUES
+CREATE TABLE mantenimientos_tanque (
+    id SERIAL PRIMARY KEY,
+    tanque_id INT REFERENCES tanques(id) ON DELETE CASCADE NOT NULL,
+    gerente_id UUID REFERENCES perfiles(id),
+    tipo VARCHAR(50) NOT NULL, -- 'purga_agua', 'limpieza_fondo', 'prueba_estanqueidad', 'calibracion_vara', 'inspeccion_valvulas', 'otro'
+    fecha_inicio TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()),
+    fecha_fin TIMESTAMP WITH TIME ZONE,
+    estado VARCHAR(20) DEFAULT 'en_proceso' CHECK (estado IN ('en_proceso', 'completado', 'cancelado')),
+    tecnico_responsable VARCHAR(100),
+    costo DECIMAL(10,2) DEFAULT 0.00,
+    observaciones TEXT,
+    bloquear_despacho BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
+);
+
+-- 8. TABLA DE CONFIGURACIÓN DE AUTOMATIZACIÓN (Para n8n)
 -- Soporta el CU: Configurar Horario de Reportes.
 CREATE TABLE configuracion_reportes (
     id SERIAL PRIMARY KEY,

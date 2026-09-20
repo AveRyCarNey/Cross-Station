@@ -6,12 +6,13 @@ import VentasDiarias from '@/components/VentasDiarias';
 import AuditoriaFugas from '@/components/AuditoriaFugas';
 import RecepcionCisternas from '@/components/RecepcionCisternas';
 import GestionOperadores from '@/components/GestionOperadores';
+import ConfiguracionReportes from '@/components/ConfiguracionReportes';
 
 export default function DashboardGerente() {
   const [tanques, setTanques] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [vistaActiva, setVistaActiva] = useState('dashboard'); // 'dashboard' | 'ventas' | 'auditoria' | 'operadores'
+  const [vistaActiva, setVistaActiva] = useState('dashboard'); // 'dashboard' | 'ventas' | 'auditoria' | 'operadores' | 'reportes'
 
   // Estados para la proyección total de la estación
   const [proyeccionTotal, setProyeccionTotal] = useState(null);
@@ -485,6 +486,17 @@ export default function DashboardGerente() {
           >
             Equipo de Operadores
           </button>
+          <button
+            type="button"
+            onClick={() => setVistaActiva('reportes')}
+            className={`w-full text-left block p-3 rounded transition-colors cursor-pointer ${
+              vistaActiva === 'reportes'
+                ? 'bg-slate-800 text-white font-medium'
+                : 'text-slate-300 hover:bg-slate-800'
+            }`}
+          >
+            Reportes por Correo
+          </button>
         </nav>
 
         {/* Botón Cerrar Sesión al final de la sidebar */}
@@ -823,6 +835,16 @@ export default function DashboardGerente() {
               <p className="text-sm text-gray-500 mt-1">Aprueba operadores y revisa cuánto dinero ha cobrado cada uno</p>
             </header>
             <GestionOperadores tanquesActuales={tanques} />
+          </div>
+        )}
+
+        {vistaActiva === 'reportes' && (
+          <div className="space-y-6">
+            <header className="mb-6">
+              <h1 className="text-3xl font-bold text-gray-800">Reportes por Correo</h1>
+              <p className="text-sm text-gray-500 mt-1">Configura a qué correo y a qué hora enviar el resumen diario de ventas y litros</p>
+            </header>
+            <ConfiguracionReportes />
           </div>
         )}
       </main>

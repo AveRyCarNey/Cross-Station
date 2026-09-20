@@ -1,0 +1,134 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "e4f0a9b1-5d6c-4f8a-9e2b-1c3d5e7f8g9h",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT hora_corte_diario FROM configuracion_reportes LIMIT 1;"
+      },
+      "id": "a1b2c3d4-e5f6-7g8h-9i0j-k1l2m3n4o5p6",
+      "name": "Obtener Hora Corte",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $now.setZone('America/Caracas').toFormat('HH:00:00') }}",
+              "value2": "={{ $json.hora_corte_diario }}",
+              "operation": "startsWith"
+            }
+          ]
+        }
+      },
+      "id": "z9y8x7w6-v5u4-t3s2-r1q0-p9o8n7m6l5k4",
+      "name": "Es hora del reporte?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COALESCE(SUM(monto_cobrado), 0) as ingresos, COALESCE(SUM(litros_vendidos), 0) as volumen FROM ventas WHERE DATE(fecha_registro) = CURRENT_DATE;"
+      },
+      "id": "q1w2e3r4-t5y6-u7i8-o9p0-a1s2d3f4g5h6",
+      "name": "Extraer Ventas del Dia",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [
+        850,
+        150
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "gerente@cross-station.com",
+        "subject": "Reporte de Corte Diario - Cross-Station",
+        "message": "=Reporte de Corte Diario:\n\nHoy se facturaron ${{ $json.ingresos }} y se despacharon {{ $json.volumen }} litros totales en la pista.\n\n---\nSistema automatizado Cross-Station.",
+        "appendAttribution": false
+      },
+      "id": "m1n2b3v4-c5x6-z7l8-k9j0-h1g2f3d4s5a6",
+      "name": "Enviar Correo",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1050,
+        150
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Obtener Hora Corte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener Hora Corte": {
+      "main": [
+        [
+          {
+            "node": "Es hora del reporte?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Es hora del reporte?": {
+      "main": [
+        [
+          {
+            "node": "Extraer Ventas del Dia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer Ventas del Dia": {
+      "main": [
+        [
+          {
+            "node": "Enviar Correo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
