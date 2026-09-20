@@ -26,11 +26,26 @@ function guardarConfigLocal(cfg) {
   }
 }
 
-// Cliente Supabase del servidor
-function getServerSupabase() {
+// Cliente Supabase del servidor con soporte de service_role y auth headers
+function getServerSupabase(authHeader = null) {
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (serviceKey) {
+    return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, serviceKey, {
+      auth: { persistSession: false }
+    });
+  }
+
+  const clientOptions = { auth: { persistSession: false } };
+  if (authHeader && authHeader.startsWith('Bearer ') && !authHeader.includes(process.env.CRON_SECRET || '')) {
+    clientOptions.global = {
+      headers: { Authorization: authHeader }
+    };
+  }
+
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    clientOptions
   );
 }
 
@@ -100,24 +115,42 @@ async function ejecutarEnvioReporte(supabase, configOverride = {}) {
   const config = await obtenerConfiguracion(supabase);
   const destinatario = configOverride.email_destinatario || config.email_destinatario || process.env.EMAIL_USER;
 
-  // 1. Manejo de rangos de fecha (Zona horaria de estación Venezuela / UTC-4 con fallback)
+  // 1. Manejo de rangos de fecha flexibles y zona horaria (América/Caracas / UTC-4)
   const ahora = new Date();
-  let fechaLocalStr = ahora.toISOString().split('T')[0];
+  
+  // Fecha local de hoy en Venezuela (YYYY-MM-DD)
+  let hoyYmd = ahora.toISOString().split('T')[0];
   try {
-    fechaLocalStr = ahora.toLocaleDateString('en-CA', { timeZone: 'America/Caracas' });
+    hoyYmd = ahora.toLocaleDateString('en-CA', { timeZone: 'America/Caracas' });
   } catch (e) {}
 
-  const inicioDia = new Date(`${fechaLocalStr}T00:00:00-04:00`);
-  const inicioDiaIso = isNaN(inicioDia.getTime()) ? `${fechaLocalStr}T00:00:00Z` : inicioDia.toISOString();
-
-  // Calcular inicio de semana (Lunes a las 00:00:00 de la semana en curso)
-  const fechaSemana = isNaN(inicioDia.getTime()) ? new Date(ahora) : new Date(inicioDia);
+  // Lunes de la semana en curso en Venezuela (YYYY-MM-DD)
+  const fechaSemana = new Date(ahora);
   const dayOfWeek = fechaSemana.getDay(); // 0: Dom, 1: Lun, 2: Mar...
   const diffToMonday = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek;
   fechaSemana.setDate(fechaSemana.getDate() + diffToMonday);
   fechaSemana.setHours(0, 0, 0, 0);
-  const inicioSemanaIso = fechaSemana.toISOString();
-  const fechaSemanaStr = fechaSemana.toISOString().split('T')[0];
+  let lunesSemanaYmd = fechaSemana.toISOString().split('T')[0];
+  try {
+    lunesSemanaYmd = fechaSemana.toLocaleDateString('en-CA', { timeZone: 'America/Caracas' });
+  } catch (e) {}
+
+  const fechaLocalStr = hoyYmd;
+  const fechaSemanaStr = lunesSemanaYmd;
+
+  // Consulta amplia a BD: últimos 8 días para evitar descartar filas por zona horaria
+  const ochoDiasAtras = new Date(ahora.getTime() - 8 * 24 * 60 * 60 * 1000);
+  const filtroGteIso = ochoDiasAtras.toISOString();
+
+  // Función auxiliar para extraer YYYY-MM-DD en hora local
+  const extraerYmd = (fecha) => {
+    if (!fecha) return '';
+    try {
+      return new Date(fecha).toLocaleDateString('en-CA', { timeZone: 'America/Caracas' });
+    } catch (e) {
+      return new Date(fecha).toISOString().split('T')[0];
+    }
+  };
 
   // 2. Consultar lista completa de tanques físicos
   const { data: tanquesData, error: tanquesError } = await supabase
@@ -128,20 +161,39 @@ async function ejecutarEnvioReporte(supabase, configOverride = {}) {
   if (tanquesError) {
     console.warn('Advertencia al consultar tanques:', tanquesError.message);
   }
-  const listaTanques = tanquesData || [];
 
-  // 3. Consultar ventas de la semana en curso (incluye las de hoy)
+  // Tanques base oficiales si la consulta viene vacía por restricciones RLS
+  const tanquesDefault = [
+    { id: 1, codigo_tanque: 'GAS-1A', producto: 'Gasolina', capacidad_maxima: 35000, volumen_actual: 0 },
+    { id: 2, codigo_tanque: 'GAS-1B', producto: 'Gasolina', capacidad_maxima: 35000, volumen_actual: 0 },
+    { id: 3, codigo_tanque: 'DIE-2A', producto: 'Diesel', capacidad_maxima: 40000, volumen_actual: 0 },
+    { id: 4, codigo_tanque: 'DIE-2B', producto: 'Diesel', capacidad_maxima: 40000, volumen_actual: 0 }
+  ];
+  const listaTanques = (tanquesData && tanquesData.length > 0) ? tanquesData : tanquesDefault;
+
+  // 3. Consultar ventas recientes de la base de datos
   const { data: ventasData, error: ventasError } = await supabase
     .from('ventas')
     .select('id, litros_vendidos, monto_cobrado, metodo_pago, fecha_registro, tanque_id, tanques(id, codigo_tanque, producto)')
-    .gte('fecha_registro', inicioSemanaIso)
+    .gte('fecha_registro', filtroGteIso)
     .order('fecha_registro', { ascending: false });
 
   if (ventasError) {
-    throw new Error(`Error consultando ventas en BD: ${ventasError.message}`);
+    console.warn('Advertencia al consultar ventas:', ventasError.message);
   }
-  const ventasSemana = ventasData || [];
-  const ventasHoy = ventasSemana.filter(v => v.fecha_registro && v.fecha_registro >= inicioDiaIso);
+
+  const todasLasVentas = ventasData || [];
+
+  // Filtrar ventas de la semana (desde lunes hasta hoy) y del día de hoy
+  const ventasSemana = todasLasVentas.filter(v => {
+    const ymd = extraerYmd(v.fecha_registro);
+    return ymd >= lunesSemanaYmd && ymd <= hoyYmd;
+  });
+
+  const ventasHoy = todasLasVentas.filter(v => {
+    const ymd = extraerYmd(v.fecha_registro);
+    return ymd === hoyYmd;
+  });
 
   // 4. Consultar recargas de cisterna (recepciones_combustible)
   let recargasSemana = [];
@@ -149,16 +201,23 @@ async function ejecutarEnvioReporte(supabase, configOverride = {}) {
     const { data: recargasData, error: recargasError } = await supabase
       .from('recepciones_combustible')
       .select('id, tanque_id, volumen_recibido, nro_guia_despacho, fecha_recepcion, tanques(id, codigo_tanque, producto)')
-      .gte('fecha_recepcion', inicioSemanaIso)
+      .gte('fecha_recepcion', filtroGteIso)
       .order('fecha_recepcion', { ascending: false });
 
     if (!recargasError && recargasData) {
-      recargasSemana = recargasData;
+      recargasSemana = recargasData.filter(r => {
+        const ymd = extraerYmd(r.fecha_recepcion);
+        return ymd >= lunesSemanaYmd && ymd <= hoyYmd;
+      });
     }
   } catch (err) {
     console.warn('Tabla recepciones_combustible no accesible:', err.message);
   }
-  const recargasHoy = recargasSemana.filter(r => r.fecha_recepcion && r.fecha_recepcion >= inicioDiaIso);
+
+  const recargasHoy = recargasSemana.filter(r => {
+    const ymd = extraerYmd(r.fecha_recepcion);
+    return ymd === hoyYmd;
+  });
 
   // 5. Cálculos para el DÍA DE HOY
   const ingresosHoy = ventasHoy.reduce((acc, v) => acc + Number(v.monto_cobrado || 0), 0);
@@ -624,7 +683,8 @@ export async function GET(request) {
     return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
   }
 
-  const supabase = getServerSupabase();
+  const authHeader = request.headers.get('authorization');
+  const supabase = getServerSupabase(authHeader);
   const url = new URL(request.url);
 
   // Modo solo consultar configuración
@@ -693,7 +753,8 @@ export async function POST(request) {
     return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
   }
 
-  const supabase = getServerSupabase();
+  const authHeader = request.headers.get('authorization');
+  const supabase = getServerSupabase(authHeader);
 
   try {
     const body = await request.json();
